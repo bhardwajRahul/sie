@@ -6,7 +6,7 @@ no network, no inference spend.
     python3 score.py
 
 Prints "328 of 335 values matched the screen", the figure the page publishes,
-and the per-screen lines it shows beside three of the screenshots.
+and the three per-screen figures pinned in PAGE_PER_SCREEN.
 
 `expected` in inputs.json was read off each screenshot at full resolution and
 committed before any model run. This compares each recorded reply with it using
@@ -47,19 +47,23 @@ PINNED_OIDS = {
 
 PAGE_FIGURE = (328, 335)
 PAGE_SCREENS = 12
-# The per-screen lines the page prints beside three of the screenshots, in the
-# order its proof grid shows them.
+# Three per-screen figures the page publishes, checked against the recording so
+# that a rescore cannot move a published number quietly.
 #
-# This named four screens until superlinked/sie-web#468: superset-slack-dashboard
-# at 28 of 32, kubernetes-dashboard-node, gitlab-pipeline-list at 17 of 19 and
-# gitlab-ci-grafana-dashboard. Those four were the three screens that missed
-# anything plus one clean one, so the page led with 328 of 335 and then
-# illustrated it with its own counterexamples. The grid was reselected to carry
-# the capability, and the two screens that came off it are still scored below;
-# they are simply no longer among the lines the page prints.
+# This block used to say which screens the proof grid draws, and in what order.
+# That claim was wrong twice inside two days: once naming four screens, then
+# naming three from a page change that had not shipped. Both times every run
+# stayed green, because this script cannot see the page and never could. It is
+# gone rather than corrected a third time. Which screens the page draws is the
+# page's decision and the page's SOURCES.md records it.
+#
+# What survives is what the recording can settle: these figures, PAGE_FIGURE
+# and PAGE_SCREENS. Nothing here was rescored in any of it, and every one of
+# the twelve screens is scored and printed below whether the page draws it or
+# not.
 PAGE_PER_SCREEN = {
+    "argocd-applicationsets": (32, 32),
     "kubernetes-dashboard-node": (26, 26),
-    "gitlab-ci-grafana-dashboard": (51, 52),
     "airflow-dag-list": (31, 31),
 }
 
@@ -423,10 +427,19 @@ def main() -> int:
         for line in failures:
             print(f"  {line}", file=sys.stderr)
         return 1
+    # What this line may claim, found by tampering with it rather than by
+    # reading it. Swapping one entry of PAGE_PER_SCREEN for a screen the page
+    # does not draw, with its correct figures, leaves the run green: the loop
+    # above checks the numbers of whatever slugs it is handed, not that those
+    # slugs are the page's. That is the hole that let this file describe a grid
+    # from an unmerged PR while every run passed. Nothing here can reach the
+    # page, so the wording says what was checked instead of implying more.
     print(
-        f"Matches the {want_passed} of {want_total}, and the {len(PAGE_PER_SCREEN)} "
-        f"per-screen lines, published on {manifest['page']}."
+        f"The {len(PAGE_PER_SCREEN)} per-screen figures below PAGE_PER_SCREEN match "
+        f"the recording, as does the {want_passed} of {want_total} published on "
+        f"{manifest['page']}."
     )
+    print("Not checked here: that those are the screens the page currently draws. Its SOURCES.md lists them.")
     return 0
 
 
