@@ -6,7 +6,12 @@ no inference spend.
     python3 score.py
 
 Prints "55 of 57 returned boxes sit on the object your agent asked for", the
-figure the page publishes, and the per-photo lines it shows beside the cards.
+figure the page publishes, and the per-photo boxes-per-label figures pinned in
+PAGE_PER_PHOTO.
+
+The page states no recall figure anywhere. The numbers it used to print are
+still computed here and checked against the results table in the page's
+SOURCES.md, which is where a reader finds them now.
 
 Two sides that the same edit cannot move together:
 
@@ -37,24 +42,34 @@ EVIDENCE = ROOT / "evidence"
 # computes anything else. If that happens, report it: it means the page or the
 # evidence is wrong, and neither number should be quietly adjusted to agree.
 PAGE_HEADLINE = (55, 57)
-PAGE_COVERAGE = (52, 88)
 PAGE_DUPLICATES = 3
 PAGE_WRONG = 2
 PAGE_PHOTOS = 9
-PAGE_DISPLAYED = 8
-# The per-photo lines the page prints on its six proof cards.
+# Recall, which the page states nowhere. Its SOURCES.md prints it in the results
+# table, so this pair is checked against that file rather than against the page.
+SOURCES_COVERAGE = (52, 88)
+
+# Four per-photo figures: the label sent, and the boxes that came back carrying
+# it. Pinned so that a rescore cannot move one quietly.
+#
+# This block used to say which photographs the page displays, in which surface,
+# and it carried a PAGE_DISPLAYED count and named the hero and playground
+# photographs. Every one of those was a claim about a page this script cannot
+# reach, and it was already wrong before this file was last touched: it named
+# six proof cards at a time the page had shown three for weeks, and every run
+# stayed green throughout, because nothing here can tell whether the slugs it
+# was handed are the ones the page draws. Which photographs the page displays is
+# the page's decision and its SOURCES.md records it.
+#
+# What survives is what the recording settles: these figures, PAGE_HEADLINE,
+# PAGE_PHOTOS, PAGE_DUPLICATES, PAGE_WRONG and SOURCES_COVERAGE. All nine
+# photographs are scored and printed below whether the page draws them or not.
 PAGE_PER_PHOTO = {
-    "container-dock": {"forklift": (1, 1), "shipping container": (1, 1), "person": (2, 2)},
-    "food-box-floor": {"safety vest": (9, 14)},
-    "produce-department": {"person": (8, 8), "shopping cart": (2, 2), "yellow price sign": (1, 7)},
-    "soft-drink-shelf": {"price tag": (0, 11), "7 Up bottle": (2, 3)},
-    "fema-caribbean-forklift": {"forklift": (1, 1), "pallet jack": (0, 1)},
-    "javits-pallet-jacks": {"pallet jack": (1, 3), "person": (3, 3)},
+    "sauce-shelf": {"sale sign": 10},
+    "food-box-floor": {"safety vest": 9},
+    "fulfillment-tour": {"safety vest": 7},
+    "hangar-pallet-jacks": {"pallet jack": 4},
 }
-# The hero photo and the playground photo, the other two of the eight surfaces
-# the page counts. Every total below covers all nine.
-PAGE_HERO = ("sauce-shelf", 10, 14)
-PAGE_PLAYGROUND = ("hangar-pallet-jacks", 4, 5)
 
 DETECTION_MODEL = "IDEA-Research/grounding-dino-base"
 VERDICTS = ("hit", "duplicate", "wrong")
@@ -262,11 +277,13 @@ def main() -> int:
     )
 
     want_on, want_boxes = PAGE_HEADLINE
-    want_found, want_counted = PAGE_COVERAGE
+    want_found, want_counted = SOURCES_COVERAGE
     if (on_object, boxes) != PAGE_HEADLINE:
         failures.append(f"headline: got {on_object} of {boxes}, page publishes {want_on} of {want_boxes}")
-    if (found, counted) != PAGE_COVERAGE:
-        failures.append(f"coverage: got {found} of {counted}, page publishes {want_found} of {want_counted}")
+    if (found, counted) != SOURCES_COVERAGE:
+        failures.append(
+            f"coverage: got {found} of {counted}, the page's SOURCES.md prints {want_found} of {want_counted}"
+        )
     if duplicates != PAGE_DUPLICATES:
         failures.append(f"duplicates: got {duplicates}, page publishes {PAGE_DUPLICATES}")
     if wrong != PAGE_WRONG:
@@ -274,25 +291,24 @@ def main() -> int:
     if photos != PAGE_PHOTOS:
         failures.append(f"photos: got {photos}, page publishes {PAGE_PHOTOS}")
 
-    # The per-photo lines, on every surface the page counts: six proof cards,
-    # the hero and the playground. Eight of the nine photos; the ninth,
-    # fulfillment-tour, is recorded, counted in every total above and displayed
-    # nowhere.
+    # The four per-photo figures, and the property that makes a boxes count the
+    # same number as a found count on each: every box these four returned is a
+    # first box on the object its label names. Read from the hand verdicts, not
+    # from the figures, so the two cannot agree by construction.
     for case_id, expected in PAGE_PER_PHOTO.items():
-        got = per_photo.get(case_id)
+        got = {label: hits for label, (hits, _counted) in per_photo.get(case_id, {}).items()}
         if got != expected:
-            failures.append(f"{case_id}: got {got}, page publishes {expected}")
-    for case_id, hits, total in (PAGE_HERO, PAGE_PLAYGROUND):
-        got_line = per_photo.get(case_id, {})
-        got_values = next(iter(got_line.values()), None)
-        if got_values != (hits, total):
-            failures.append(f"{case_id}: got {got_values}, page publishes {hits} of {total}")
-
-    # An internal guard on the constants above, not a reading of the page: it
-    # catches a per-photo entry added here without updating the total.
-    displayed = len(PAGE_PER_PHOTO) + 2
-    if displayed != PAGE_DISPLAYED:
-        failures.append(f"displayed photos: checked {displayed}, page says {PAGE_DISPLAYED}")
+            failures.append(f"{case_id}: got {got}, this example pins {expected}")
+        drawn = next((case for case in review["cases"] if case["id"] == case_id), None)
+        if drawn is None:
+            failures.append(f"{case_id}: pinned above and not in the recorded review")
+            continue
+        flawed = [d for d in drawn["detections"] if d["verdict"] != "hit"]
+        if flawed:
+            failures.append(
+                f"{case_id}: {len(flawed)} box(es) are not a first box on the object named, "
+                "so its boxes count and its found count are not the same number"
+            )
 
     if failures:
         print(
@@ -304,9 +320,20 @@ def main() -> int:
             print(f"  {line}", file=sys.stderr)
         return 1
 
+    # What this line may claim, found by tampering with it rather than by reading
+    # it. Swapping one entry of PAGE_PER_PHOTO for a photograph the page does
+    # not display, with its correct figures, leaves the run green: the loop above
+    # checks the numbers of whatever slugs it is handed. That is the hole that
+    # let this file describe six proof cards for weeks after the page had three.
+    # Nothing here can reach the page, so the wording says what was checked.
     print(
-        f"Matches the {want_on} of {want_boxes}, the {want_found} of {want_counted}, and the per-photo lines "
-        f"on all {PAGE_DISPLAYED} displayed photos, published on {manifest['page']}."
+        f"Matches the {want_on} of {want_boxes} published on {manifest['page']}, the "
+        f"{len(PAGE_PER_PHOTO)} per-photo figures below PAGE_PER_PHOTO, and the "
+        f"{want_found} of {want_counted} in its SOURCES.md."
+    )
+    print(
+        "Not checked here: which photographs the page displays, or on which surface. "
+        "Its SOURCES.md lists them."
     )
     return 0
 
