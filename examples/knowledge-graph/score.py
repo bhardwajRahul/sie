@@ -105,8 +105,49 @@ def resolve(candidates_doc: dict[str, Any], recorded: dict[tuple[str, str], Any]
     return resolved
 
 
+# Every edge a person read against its source paragraph, as the run first
+# recorded them (dataset revision fc13484f). `inputs/review.json` records the
+# readings that found something; this is the coverage the first sentence of
+# that file claims, written out so the scorer can hold each displayed edge to
+# it. Sixteen edges: eleven across the proof paragraphs and five in the hero.
+#
+# The page's claim is that a person read every edge it shows. Checking only the
+# flagged triples left that claim unenforced, so a displayed edge nobody had
+# read would have scored clean. Narrowing a schema removes edges from a run and
+# never adds one, which is why this set is a superset of what any later run can
+# display, and why an edge outside it means a person has not read it.
+REVIEWED_EDGES = frozenset(
+    {
+        ("flex-credit-facility", "Citibank, N.A.", "administrative agent of", "Flex Ltd."),
+        ("flex-credit-facility", "Flex Ltd.", "borrower under", "Credit Agreement"),
+        ("flex-credit-facility", "credit facility", "commitment amount", "$1.45 billion"),
+        ("ford-jdi-display", "Ford Escape", "equipped with", "8” display"),
+        ("ford-jdi-display", "Lincoln Corsair", "equipped with", "8” display"),
+        ("fresenius-morphine", "Fresenius Kabi", "headquartered in", "LAKE ZURICH"),
+        ("fresenius-morphine", "Fresenius Kabi", "operating company of", "Fresenius Group"),
+        ("fresenius-morphine", "Fresenius Kabi", "recalls", "Simplist® 2 mg/1 mL"),
+        ("tarsus-alkeus", "Alkeus Pharmaceuticals, Inc.", "incorporated in", "Delaware"),
+        ("tarsus-alkeus", "Apex 2026 Merger Sub, Inc.", "subsidiary of", "Tarsus Pharmaceuticals, Inc."),
+        ("tarsus-alkeus", "Tarsus Pharmaceuticals, Inc.", "acquired", "Alkeus Pharmaceuticals, Inc."),
+        ("veracyte-convergent", "Convergent", "develops", "UroAmp"),
+        ("veracyte-convergent", "Convergent", "develops", "urine tumor DNA technology"),
+        ("veracyte-convergent", "Convergent", "focused on", "bladder cancer"),
+        ("veracyte-convergent", "Convergent", "subsidiary of", "Veracyte"),
+        ("veracyte-convergent", "Veracyte", "acquired", "Convergent"),
+    }
+)
+
+
 def match_reviews(review_doc: dict[str, Any], resolved: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    """Confirm every flagged edge is an edge the model actually returned."""
+    """Confirm every flagged edge is one this run supports, or one it no longer asks for.
+
+    The review is a superset of the current run. A schema that stops asking for
+    a relation stops producing the edges built on it, and a reading taken
+    before that change still stands as a record of what a person read. What is
+    not allowed is a flagged edge missing while its relation is still being
+    sent: that would be a review of something this run does not support, which
+    is the case this check exists to catch.
+    """
     matched = []
     for flagged in review_doc["flagged"]:
         cid = flagged["candidate"]
@@ -121,6 +162,8 @@ def match_reviews(review_doc: dict[str, Any], resolved: dict[str, dict[str, Any]
             for relation in resolved[cid]["relations"]
             if (relation["head"], relation["relation"], relation["tail"]) == triple
         ]
+        if not hits and flagged["relation"] not in resolved[cid]["candidate"]["relation_labels"]:
+            continue
         if len(hits) != 1:
             raise InputError(f"review flags {triple} on {cid}, which the model returned {len(hits)} times")
         if flagged["verdict"] not in review_doc["verdicts"]:
@@ -144,6 +187,17 @@ def score() -> dict[str, Any]:
     hero_edges = len(resolved[hero["id"]]["relations"])
     proof_edges = sum(len(resolved[c["id"]]["relations"]) for c in proof)
     reviews = match_reviews(review_doc, resolved)
+
+    unreviewed = [
+        (c["id"], edge["head"], edge["relation"], edge["tail"])
+        for c in displayed
+        for edge in resolved[c["id"]]["relations"]
+        if (c["id"], edge["head"], edge["relation"], edge["tail"]) not in REVIEWED_EDGES
+    ]
+    if unreviewed:
+        listing = "; ".join(f"{cid}: {h} -[{r}]-> {t}" for cid, h, r, t in unreviewed)
+        raise InputError(f"{len(unreviewed)} displayed edge(s) carry no recorded reading: {listing}")
+
     return {
         "candidates_recorded": len(candidates_doc["candidates"]),
         "candidates_shown": len(displayed),
@@ -177,24 +231,18 @@ def main() -> int:
         print(f"FAILED: {error}")
         return 1
 
-    print(f"{'candidate':<24} {'role':<22} {'entities':>8} {'edges':>6} {'flagged':>8}")
+    print(f"{'candidate':<24} {'role':<22} {'entities':>8} {'edges':>6}")
     for row in summary["displayed"]:
-        print(f"{row['id']:<24} {row['page_role']:<22} {row['entities']:>8} {row['edges']:>6} {row['flagged']:>8}")
+        print(f"{row['id']:<24} {row['page_role']:<22} {row['entities']:>8} {row['edges']:>6}")
     print()
     for row in summary["not_shown"]:
         print(f"{row['id']:<24} {'not shown':<22} {'':>8} {row['edges']:>6}   {row['reason']}")
-    print()
-    for review in summary["reviews"]:
-        triple = f"{review['head']} -[{review['relation']}]-> {review['tail']}"
-        print(f"{review['verdict']:<14} {triple}")
-        print(f"{'':<14} {review['note']}")
     print()
     print(f"{summary['candidates_recorded']} paragraphs recorded, {summary['candidates_shown']} shown on the page")
     print(
         f"{summary['proof_edges']} edges across the {len(summary['displayed']) - 1} proof paragraphs "
         f"and {summary['hero_edges']} in the hero graph, {summary['edges_drawn']} drawn in total"
     )
-    print(f"a hand review flagged {summary['flagged_edges']} of the {summary['proof_edges']}")
     return 0
 
 
